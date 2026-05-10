@@ -21,22 +21,23 @@ A secure chat application built using Flask that allows users to communicate in 
 ---
 
 ## 📸 Screenshots
+### 🔑 Login Page
+![Login](screenshots/login.png)
 
-### 🏠 Home Page
-![Home](screenshots/home.png)
+### 🪧signup
+![signup](screenshots/signup.png)
 
 ### 💬 Chat Interface
 ![Chat](screenshots/chat.png)
 
-### 🔑 Login Page
-![Login](screenshots/login.png)
+
 
 ---
 
 ## ▶️ How to Run Locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Secure-chat.git
+git clone https://github.com/atanubanerjeegb-design/Secure-chat.git
 cd Secure-chat
 pip install flask
 python app.py
