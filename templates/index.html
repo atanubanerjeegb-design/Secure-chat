@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>Secure Chat</title>
+
+<link rel="stylesheet" href="/static/style.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<!-- SIDEBAR -->
+
+<div class="sidebar">
+
+<h2>My Chats</h2>
+
+<div class="userBox">
+Logged in as: <b id="userDisplay"></b>
+</div>
+
+<div class="topBar">
+
+<button onclick="createRoom()">Create Group</button>
+
+<input id="roomInput" placeholder="Group ID">
+
+<button onclick="joinRoom()">Join</button>
+
+</div>
+
+<ul id="myChats"></ul>
+
+<h3>Online Users</h3>
+
+<ul id="onlineUsers"></ul>
+
+<a href="/logout" onclick="logoutUser()">Logout</a>
+
+</div>
+
+
+<!-- CHAT SECTION -->
+
+<div class="chat">
+
+<div class="chatHeader" id="chatHeader">
+Select Chat
+</div>
+
+<div id="chat"></div>
+
+<div class="inputBar">
+
+<textarea id="msg" placeholder="Type a message"></textarea>
+
+<input type="file" id="file">
+
+<button onclick="sendMessage()">Send</button>
+
+</div>
+
+</div>
+
+</div>
+
+<script>
+
+const SECRET_KEY = "secure-chat-key-12345"
+
+var socket = io()
+
+/* ================= ENCRYPT ================= */
+
+async function encryptMessage(message){
+
+const encoder = new TextEncoder()
+
+const data = encoder.encode(message)
+
+const keyMaterial = await crypto.subtle.importKey(
+"raw",
+encoder.encode(SECRET_KEY),
+{name:"PBKDF2"},
+false,
+["deriveKey"]
+)
+
+const key = await crypto.subtle.deriveKey(
+{
+name:"PBKDF2",
+salt:encoder.encode("salt"),
+iterations:100000,
+hash:"SHA-256"
+},
+keyMaterial,
+{name:"AES-GCM",length:256},
+true,
+["encrypt","decrypt"]
+)
+
+const iv = crypto.getRandomValues(new Uint8Array(12))
+
+const encrypted = await crypto.subtle.encrypt(
+{name:"AES-GCM",iv:iv},
+key,
+data
+)
+
+return {
+cipher:btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+iv:btoa(String.fromCharCode(...iv))
+}
+
+}
+
+/* ================= DECRYPT ================= */
+
+async function decryptMessage(cipher,iv){
+
+if(!cipher) return ""
+
+const encoder = new TextEncoder()
+
+const keyMaterial = await crypto.subtle.importKey(
+"raw",
+encoder.encode(SECRET_KEY),
+{name:"PBKDF2"},
+false,
+["deriveKey"]
+)
+
+const key = await crypto.subtle.deriveKey(
+{
+name:"PBKDF2",
+salt:encoder.encode("salt"),
+iterations:100000,
+hash:"SHA-256"
+},
+keyMaterial,
+{name:"AES-GCM",length:256},
+true,
+["encrypt","decrypt"]
+)
+
+const cipherBytes = Uint8Array.from(atob(cipher),c=>c.charCodeAt(0))
+const ivBytes = Uint8Array.from(atob(iv),c=>c.charCodeAt(0))
+
+const decrypted = await crypto.subtle.decrypt(
+{name:"AES-GCM",iv:ivBytes},
+key,
+cipherBytes
+)
+
+return new TextDecoder().decode(decrypted)
+
+}
+
+/* ================= USER ================= */
+
+var username = sessionStorage.getItem("chatUser")
+
+if(!username){
+
+username = "{{user}}"
+
+sessionStorage.setItem("chatUser",username)
+
+}
+
+document.getElementById("userDisplay").innerText = username
+
+var room = ""
+
+function logoutUser(){
+sessionStorage.removeItem("chatUser")
+}
+
+/* ================= CHAT STORAGE ================= */
+
+var myChats = JSON.parse(localStorage.getItem("myChats_" + username)) || {}
+
+function saveChats(){
+localStorage.setItem("myChats_" + username, JSON.stringify(myChats))
+}
+
+window.onload = function(){
+
+for(let r in myChats){
+
+let name = myChats[r]
+
+let li = document.createElement("li")
+
+li.innerText = name
+
+li.onclick = function(){
+openChat(name , r)
+}
+
+document.getElementById("myChats").appendChild(li)
+
+}
+
+}
+
+/* ================= ADD CHAT ================= */
+
+function addChat(name,id){
+
+if(myChats[id]) return
+
+myChats[id] = name
+
+saveChats()
+
+let li = document.createElement("li")
+
+li.innerText = name
+
+li.onclick = function(){
+openChat(name,id)
+}
+
+document.getElementById("myChats").appendChild(li)
+
+}
+
+/* ================= OPEN CHAT ================= */
+
+function openChat(name,id){
+
+room = id
+
+document.getElementById("chatHeader").innerText = name
+
+document.getElementById("chat").innerHTML = ""
+
+socket.emit("join",{
+room:room,
+user:username
+})
+
+}
+
+/* ================= GROUP ================= */
+
+function createRoom(){
+
+let id = Math.random().toString(36).substring(2,7)
+
+addChat("Group "+id , id)
+
+openChat("Group "+id , id)
+
+alert("Group ID: "+id)
+
+}
+
+function joinRoom(){
+
+let id = document.getElementById("roomInput").value
+
+if(id==""){
+alert("Enter group ID")
+return
+}
+
+addChat("Group "+id , id)
+
+openChat("Group "+id , id)
+
+}
+
+/* ================= SEND ================= */
+
+async function sendMessage(){
+
+if(room==""){
+alert("Join a chat first")
+return
+}
+
+let msg = document.getElementById("msg").value.trim()
+
+let file = document.getElementById("file").files[0]
+
+if(msg=="" && !file) return
+
+if(file){
+
+let data = new FormData()
+
+data.append("user",username)
+data.append("msg",msg)
+data.append("room",room)
+data.append("file",file)
+
+fetch("/upload",{method:"POST",body:data})
+
+}else{
+
+let enc = await encryptMessage(msg)
+
+socket.emit("message",{
+user:username,
+cipher:enc.cipher,
+iv:enc.iv,
+room:room
+})
+
+}
+
+document.getElementById("msg").value=""
+document.getElementById("file").value=""
+
+}
+
+/* ================= ENTER SEND ================= */
+
+document.getElementById("msg").addEventListener("keydown", function(e){
+
+if(e.key === "Enter" && !e.shiftKey){
+
+e.preventDefault()
+
+sendMessage()
+
+}
+
+})
+
+/* ================= DM ================= */
+
+function startDM(user){
+
+if(user === username) return
+
+let id = "dm_" + [username,user].sort().join("_")
+
+addChat(user,id)
+
+openChat(user,id)
+
+}
+
+/* ================= ONLINE USERS ================= */
+
+socket.on("online_users",function(users){
+
+let list = document.getElementById("onlineUsers")
+
+list.innerHTML = ""
+
+users.forEach(function(u){
+
+if(u==username) return
+
+let li = document.createElement("li")
+
+li.innerText = u
+
+li.style.cursor="pointer"
+
+li.onclick=function(){
+
+let id = "dm_" + [username,u].sort().join("_")
+
+addChat(u , id)
+
+openChat(u , id)
+
+}
+
+list.appendChild(li)
+
+})
+
+})
+
+/* ================= RECEIVE ================= */
+
+socket.on("message", async function(data){
+
+let chat = document.getElementById("chat")
+
+let type = data.user === username ? "myMessage" : "otherMessage"
+
+let messageText=""
+
+if(data.cipher){
+
+let decrypted = await decryptMessage(data.cipher,data.iv)
+
+messageText = decrypted.replace(/\n/g,"<br>")
+
+}
+
+let html = "<div class='message "+type+"'><b class='userTag' onclick=\"startDM('"+data.user+"')\">"+data.user+"</b>: "+messageText
+
+if(data.file){
+
+let ext = data.file.split(".").pop().toLowerCase()
+
+let imgs = ["png","jpg","jpeg","gif","webp"]
+
+if(imgs.includes(ext)){
+
+html += "<br><img src='/uploads/"+data.file+"'>"
+
+}else{
+
+html += " <a href='/uploads/"+data.file+"' target='_blank'>📎 "+(data.name || "File")+"</a>"
+
+}
+
+}
+
+html += "</div>"
+
+chat.innerHTML += html
+
+chat.scrollTop = chat.scrollHeight
+
+})
+
+</script>
+
+</body>
+</html>
